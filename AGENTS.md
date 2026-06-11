@@ -144,3 +144,14 @@ Read `docs/adr/` before implementing features in these areas:
 - Multi-platform adapters → `docs/adr/multi-platform-adapters.md`
 
 Write a new ADR if your feature introduces a new subsystem.
+
+## Command Output
+
+Protect context usage. **Any command with unknown or potentially large output must be byte-capped.**
+
+```bash
+# Examples
+cargo build 2>&1 | head -c 8000
+git log --oneline | head -50
+kubectl logs deployment/foo | tail -c 4000
+```
