@@ -82,6 +82,7 @@ agents:
     enabled: true
     image: ghcr.io/openabdev/openab-codex:latest
     command: codex-acp
+    workingDir: /home/node
     envFrom:
       - secretRef:
           name: codex-provider-secrets
@@ -94,7 +95,7 @@ agents:
 With that default layout, Codex reads its config from:
 
 ```text
-/home/agent/.codex/config.toml
+/home/node/.codex/config.toml
 ```
 
 If you override `workingDir`, adjust the paths in this guide to match your
