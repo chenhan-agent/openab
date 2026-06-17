@@ -180,20 +180,22 @@ async fn main() {
     let prefetch = tokio::task::spawn_blocking(Adapter::fetch_available_models);
     let adapter = Arc::new(tokio::sync::Mutex::new(Adapter::new()));
 
-    if let Ok(models) = prefetch.await {
-        let mut guard = adapter.lock().await;
-        if !models.is_empty() {
-            eprintln!("[agy-acp] fetched {} models from `agy models`, updating cache", models.len());
-            guard.save_models_cache(&models);
-            guard.available_models = Some(models);
-        } else if let Some(cached) = guard.load_cached_models() {
-            eprintln!("[agy-acp] `agy models` failed, using cached model list ({} models)", cached.len());
-            guard.available_models = Some(cached);
-        } else {
-            eprintln!("[agy-acp] `agy models` failed and no cache found, using hardcoded fallback");
-            guard.available_models = Some(Adapter::static_fallback_models());
+    // Update the model list in the background once `agy models` returns.
+    // We must NOT await prefetch here — that would block stdin and cause the
+    // `initialize` JSON-RPC request to time out on slow networks (30 s limit).
+    let adapter_bg = Arc::clone(&adapter);
+    tokio::spawn(async move {
+        if let Ok(models) = prefetch.await {
+            let mut guard = adapter_bg.lock().await;
+            if !models.is_empty() {
+                eprintln!("[agy-acp] fetched {} models from `agy models`, updating cache", models.len());
+                guard.save_models_cache(&models);
+                guard.available_models = Some(models);
+            } else {
+                eprintln!("[agy-acp] `agy models` returned empty, keeping cached/fallback model list");
+            }
         }
-    }
+    });
 
     let active_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>> =
         Arc::new(Mutex::new(HashMap::new()));

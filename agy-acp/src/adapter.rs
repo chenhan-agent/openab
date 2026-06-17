@@ -19,14 +19,23 @@ impl Adapter {
     pub fn new() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         let state_dir = PathBuf::from(&home).join(".openab/agy-acp");
+        let state_file = state_dir.join("sessions.json");
+        // Pre-load from disk cache so session/new works immediately without waiting for
+        // the background `agy models` network call to complete.
+        let models_cache_path = state_file.with_file_name("models_cache.json");
+        let available_models = fs::read_to_string(&models_cache_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(Self::static_fallback_models);
         Self {
             sessions: HashMap::new(),
             working_dir: std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| "/tmp".to_string()),
             conversations_dir: PathBuf::from(&home).join(".gemini/antigravity-cli/conversations"),
-            state_file: state_dir.join("sessions.json"),
-            available_models: None,
+            state_file,
+            available_models: Some(available_models),
         }
     }
 
