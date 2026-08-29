@@ -18,6 +18,14 @@ COPY crates/ crates/
 COPY src/ src/
 RUN touch src/main.rs crates/openab-core/src/lib.rs crates/openab-gateway/src/lib.rs crates/openab-mcp/src/lib.rs crates/openab-cp/src/lib.rs && cargo build --release
 
+# --- Build agy-acp adapter ---
+FROM rust:1-bookworm AS adapter-builder
+WORKDIR /build
+COPY agy-acp/Cargo.toml ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
+COPY agy-acp/src/ src/
+RUN touch src/main.rs && cargo build --release
+
 # --- Runtime stage ---
 FROM node:22-trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl procps ripgrep tini unzip && rm -rf /var/lib/apt/lists/*
@@ -34,10 +42,162 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     apt-get update && apt-get install -y --no-install-recommends gh && \
     rm -rf /var/lib/apt/lists/*
 
+# --- Custom Agent Enhancements ---
+# Adding Python and extra tools in individual lines to maximize layer reuse.
+RUN apt-get update
+
+# Base requirements for advanced web automation and git operations.
+RUN apt-get install -y --no-install-recommends python3
+RUN apt-get install -y --no-install-recommends python3-pip
+RUN apt-get install -y --no-install-recommends python3-virtualenv
+RUN apt-get install -y --no-install-recommends openssh-client
+
+# Build tools for compiling native extensions (C/C++).
+RUN apt-get install -y --no-install-recommends build-essential
+
+# Install Rust toolchain globally so the 'node' user can access it.
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+
+# Multimedia and download optimization for yt-dlp.
+RUN apt-get install -y --no-install-recommends ffmpeg
+RUN apt-get install -y --no-install-recommends atomicparsley
+RUN apt-get install -y --no-install-recommends aria2
+RUN apt-get install -y --no-install-recommends python3-brotli
+
+# Archiving and file utilities.
+RUN apt-get install -y --no-install-recommends zip unzip
+RUN apt-get install -y --no-install-recommends poppler-utils
+
+# --- User Workflow & Interactive Tools ---
+# Productivity and inspection tools requested by user.
+RUN apt-get install -y --no-install-recommends fzf
+RUN apt-get install -y --no-install-recommends bat && ln -s /usr/bin/batcat /usr/local/bin/bat
+RUN apt-get install -y --no-install-recommends direnv
+RUN apt-get install -y --no-install-recommends htop
+RUN apt-get install -y --no-install-recommends jq
+RUN apt-get install -y --no-install-recommends less
+RUN apt-get install -y --no-install-recommends moreutils
+RUN apt-get install -y --no-install-recommends psmisc
+RUN apt-get install -y --no-install-recommends screen
+RUN apt-get install -y --no-install-recommends silversearcher-ag
+RUN apt-get install -y --no-install-recommends sudo
+RUN apt-get install -y --no-install-recommends tig
+RUN apt-get install -y --no-install-recommends tmux
+RUN apt-get install -y --no-install-recommends tree
+RUN apt-get install -y --no-install-recommends vim
+RUN apt-get install -y --no-install-recommends zsh
+RUN apt-get install -y --no-install-recommends wget
+RUN apt-get install -y --no-install-recommends ncdu
+
+# Search and Navigation suggestions.
+RUN apt-get install -y --no-install-recommends fd-find && ln -s /usr/bin/fdfind /usr/local/bin/fd
+
+# Networking tools.
+RUN apt-get install -y --no-install-recommends iputils-ping
+RUN apt-get install -y --no-install-recommends net-tools
+RUN apt-get install -y --no-install-recommends dnsutils
+RUN apt-get install -y --no-install-recommends keychain
+
+# Python Dev & Debugging.
+RUN apt-get install -y --no-install-recommends ipython3
+RUN apt-get install -y --no-install-recommends python3-pudb
+
+# --- X11 / GUI Debugging ---
+# Virtual framebuffer and VNC for visual browser debugging.
+RUN apt-get install -y --no-install-recommends xvfb
+RUN apt-get install -y --no-install-recommends x11vnc
+RUN apt-get install -y --no-install-recommends fluxbox
+RUN apt-get install -y --no-install-recommends xterm
+
+# --- System Configuration ---
+# Generate locales for proper UTF-8 support in zsh/tmux.
+RUN apt-get install -y --no-install-recommends locales && sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && locale-gen
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+
+# --- Additional AI Agents ---
+# Install Claude Code and its ACP adapter (Alternative to Copilot).
+ARG CLAUDE_AGENT_ACP_VERSION=0.59.0
+ARG CLAUDE_CODE_VERSION=2.1.212
+RUN npm install -g @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION} @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --retry 3
+ENV CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude
+
+# Install Codex and its ACP adapter (OpenAI backend).
+ARG CODEX_ACP_VERSION=1.1.4
+ARG CODEX_VERSION=0.144.1
+RUN npm install -g @agentclientprotocol/codex-acp@${CODEX_ACP_VERSION} @openai/codex@${CODEX_VERSION} --fetch-retries=3
+
+# Install agy (Google Antigravity CLI) — pinned version.
+ENV AGY_VERSION=1.1.13
+ARG AGY_SHA256_AMD64=edc7c32b5ab4fc2e4da03381fee83ed566dea6b56b56f9329cd13cd77947a1d9
+ARG AGY_SHA256_ARM64=a9fdd2a386770c27dbf784436bd4de70d4d4901c832d5ec6abf27758d5c370f8
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+      amd64) ASSET="agy_cli_linux_x64.tar.gz"; sha="${AGY_SHA256_AMD64}" ;; \
+      arm64) ASSET="agy_cli_linux_arm64.tar.gz"; sha="${AGY_SHA256_ARM64}" ;; \
+      *) echo "unsupported arch: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${AGY_VERSION}/${ASSET}" \
+      -o /tmp/agy.tar.gz && \
+    echo "${sha}  /tmp/agy.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/agy.tar.gz -C /usr/local/bin && \
+    rm /tmp/agy.tar.gz && \
+    mv /usr/local/bin/antigravity /usr/local/bin/agy && \
+    chmod +x /usr/local/bin/agy
+
+# --- Browser Automation (NPM) ---
+# Playwright: Core headless browser automation.
+RUN npm install -g playwright --retry 3
+# Skyvern: Vision-based browser automation (handles complex/dynamic UIs).
+# RUN npm install -g @skyvern/client --retry 3
+# Stealth: Prevents bot detection on sensitive sites like Twitter or Booking.com.
+RUN npm install -g playwright-extra puppeteer-extra-plugin-stealth --retry 3
+
+# --- Playwright Browser Runtimes ---
+# Install Chromium and its Linux system dependencies.
+RUN npx playwright install-deps chromium
+RUN npx playwright install chromium
+
+# Install Firefox (required by webwright skill).
+RUN npx playwright install-deps firefox
+RUN npx playwright install firefox
+
+# --- Web Crawling & Content Extraction (Python) ---
+# Isolate third-party tools so pip never overwrites apt-owned packages (for example, typing_extensions).
+RUN python3 -m virtualenv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+RUN pip3 install requests beautifulsoup4
+# Skyvern Python SDK for vision-led browser automation (~21k stars).
+# RUN pip3 install skyvern
+# Crawl4AI: Optimized for AI/RAG, converts pages to clean Markdown (~65k stars).
+RUN pip3 install crawl4ai
+# Browser-use: Top framework for AI agents to control browsers (~94k stars).
+RUN pip3 install browser-use
+# Trafilatura: High-speed extraction of main article text (~5.7k stars).
+RUN pip3 install trafilatura
+# Firecrawl: Professional-grade crawler SDK for clean Markdown extraction (~40k stars).
+RUN pip3 install firecrawl-py
+# Shot-scraper: CLI for taking screenshots and running JS against pages (~2.4k stars).
+RUN pip3 install shot-scraper
+# yt-dlp: Extracting media/metadata from YouTube, Twitter/X, and more (~75k stars).
+RUN pip3 install yt-dlp
+# MarkItDown: Universal file-to-markdown converter (PDF, Word, Excel, etc.) (~87k stars).
+RUN pip3 install "markitdown[all]"
+
+# Add late-requested system utilities (bottom to maximize cache).
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends rsync
+RUN apt-get install -y --no-install-recommends sqlite3
+
 ENV HOME=/home/node
 WORKDIR /home/node
 
 COPY --from=builder --chown=node:node /build/target/release/openab /usr/local/bin/openab
+COPY --from=adapter-builder --chown=node:node /build/target/release/agy-acp /usr/local/bin/agy-acp
 
 RUN mkdir -p /home/node/.copilot && chown -R node:node /home/node
 
