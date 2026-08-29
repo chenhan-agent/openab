@@ -55,14 +55,7 @@ RUN apt-get install -y --no-install-recommends openssh-client
 # Build tools for compiling native extensions (C/C++).
 RUN apt-get install -y --no-install-recommends build-essential
 
-# Install Rust toolchain globally so the 'node' user can access it.
-ENV RUSTUP_HOME=/usr/local/rustup
-ENV CARGO_HOME=/usr/local/cargo
-ENV PATH=/usr/local/cargo/bin:$PATH
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-
 # Multimedia and download optimization for yt-dlp.
-RUN apt-get install -y --no-install-recommends ffmpeg
 RUN apt-get install -y --no-install-recommends atomicparsley
 RUN apt-get install -y --no-install-recommends aria2
 RUN apt-get install -y --no-install-recommends python3-brotli
@@ -83,7 +76,6 @@ RUN apt-get install -y --no-install-recommends moreutils
 RUN apt-get install -y --no-install-recommends psmisc
 RUN apt-get install -y --no-install-recommends screen
 RUN apt-get install -y --no-install-recommends silversearcher-ag
-RUN apt-get install -y --no-install-recommends sudo
 RUN apt-get install -y --no-install-recommends tig
 RUN apt-get install -y --no-install-recommends tmux
 RUN apt-get install -y --no-install-recommends tree
@@ -99,18 +91,6 @@ RUN apt-get install -y --no-install-recommends fd-find && ln -s /usr/bin/fdfind 
 RUN apt-get install -y --no-install-recommends iputils-ping
 RUN apt-get install -y --no-install-recommends net-tools
 RUN apt-get install -y --no-install-recommends dnsutils
-RUN apt-get install -y --no-install-recommends keychain
-
-# Python Dev & Debugging.
-RUN apt-get install -y --no-install-recommends ipython3
-RUN apt-get install -y --no-install-recommends python3-pudb
-
-# --- X11 / GUI Debugging ---
-# Virtual framebuffer and VNC for visual browser debugging.
-RUN apt-get install -y --no-install-recommends xvfb
-RUN apt-get install -y --no-install-recommends x11vnc
-RUN apt-get install -y --no-install-recommends fluxbox
-RUN apt-get install -y --no-install-recommends xterm
 
 # --- System Configuration ---
 # Generate locales for proper UTF-8 support in zsh/tmux.
@@ -118,18 +98,6 @@ RUN apt-get install -y --no-install-recommends locales && sed -i -e 's/# en_US.U
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
-
-# --- Additional AI Agents ---
-# Install Claude Code and its ACP adapter (Alternative to Copilot).
-ARG CLAUDE_AGENT_ACP_VERSION=0.59.0
-ARG CLAUDE_CODE_VERSION=2.1.212
-RUN npm install -g @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION} @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --retry 3
-ENV CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude
-
-# Install Codex and its ACP adapter (OpenAI backend).
-ARG CODEX_ACP_VERSION=1.1.4
-ARG CODEX_VERSION=0.144.1
-RUN npm install -g @agentclientprotocol/codex-acp@${CODEX_ACP_VERSION} @openai/codex@${CODEX_VERSION} --fetch-retries=3
 
 # Install agy (Google Antigravity CLI) — pinned version.
 ENV AGY_VERSION=1.1.13
@@ -152,41 +120,22 @@ RUN ARCH=$(dpkg --print-architecture) && \
 # --- Browser Automation (NPM) ---
 # Playwright: Core headless browser automation.
 RUN npm install -g playwright --retry 3
-# Skyvern: Vision-based browser automation (handles complex/dynamic UIs).
-# RUN npm install -g @skyvern/client --retry 3
 # Stealth: Prevents bot detection on sensitive sites like Twitter or Booking.com.
 RUN npm install -g playwright-extra puppeteer-extra-plugin-stealth --retry 3
 
 # --- Playwright Browser Runtimes ---
 # Install Chromium and its Linux system dependencies.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN npx playwright install-deps chromium
-RUN npx playwright install chromium
-
-# Install Firefox (required by webwright skill).
-RUN npx playwright install-deps firefox
-RUN npx playwright install firefox
+RUN npx playwright install chromium && chown -R node:node /ms-playwright
 
 # --- Web Crawling & Content Extraction (Python) ---
 # Isolate third-party tools so pip never overwrites apt-owned packages (for example, typing_extensions).
 RUN python3 -m virtualenv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
-RUN pip3 install requests beautifulsoup4
-# Skyvern Python SDK for vision-led browser automation (~21k stars).
-# RUN pip3 install skyvern
-# Crawl4AI: Optimized for AI/RAG, converts pages to clean Markdown (~65k stars).
-RUN pip3 install crawl4ai
-# Browser-use: Top framework for AI agents to control browsers (~94k stars).
-RUN pip3 install browser-use
-# Trafilatura: High-speed extraction of main article text (~5.7k stars).
-RUN pip3 install trafilatura
-# Firecrawl: Professional-grade crawler SDK for clean Markdown extraction (~40k stars).
-RUN pip3 install firecrawl-py
-# Shot-scraper: CLI for taking screenshots and running JS against pages (~2.4k stars).
-RUN pip3 install shot-scraper
+RUN pip3 install requests
 # yt-dlp: Extracting media/metadata from YouTube, Twitter/X, and more (~75k stars).
 RUN pip3 install yt-dlp
-# MarkItDown: Universal file-to-markdown converter (PDF, Word, Excel, etc.) (~87k stars).
-RUN pip3 install "markitdown[all]"
 
 # Add late-requested system utilities (bottom to maximize cache).
 RUN apt-get update
