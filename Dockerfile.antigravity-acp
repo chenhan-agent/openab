@@ -1,0 +1,72 @@
+# --- Build openab ---
+FROM rust:1-bookworm AS builder
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates/openab-core/Cargo.toml crates/openab-core/Cargo.toml
+COPY crates/openab-gateway/Cargo.toml crates/openab-gateway/Cargo.toml
+COPY crates/openab-mcp/Cargo.toml crates/openab-mcp/Cargo.toml
+COPY crates/openab-cp/Cargo.toml crates/openab-cp/Cargo.toml
+RUN mkdir -p src crates/openab-core/src crates/openab-gateway/src crates/openab-mcp/src crates/openab-cp/src \
+    && echo 'fn main() {}' > src/main.rs \
+    && echo '' > crates/openab-core/src/lib.rs \
+    && echo '' > crates/openab-gateway/src/lib.rs \
+    && echo '' > crates/openab-mcp/src/lib.rs \
+    && echo '' > crates/openab-cp/src/lib.rs \
+    && cargo build --release \
+    && rm -rf src crates/openab-core/src crates/openab-gateway/src crates/openab-mcp/src crates/openab-cp/src
+COPY crates/ crates/
+COPY src/ src/
+RUN touch src/main.rs crates/openab-core/src/lib.rs crates/openab-gateway/src/lib.rs crates/openab-mcp/src/lib.rs crates/openab-cp/src/lib.rs && cargo build --release
+
+# --- Runtime stage ---
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl procps python3 tini unzip && rm -rf /var/lib/apt/lists/*
+
+# Install Google Antigravity ACP Server — pinned version
+ENV AGY_ACP_VERSION=1.3.0
+ARG AGY_ACP_SHA256_AMD64=9fb60956af0a9d76220a4db91ca9ac88e2a2372ad68f985ab5fceace6b825b96
+ARG AGY_ACP_SHA256_ARM64=500b0bc0fb858e88f4df404d4cedf80bf9298c178291e39e383d6c50b111cbdf
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+      amd64) ASSET="agy-acp-server-${AGY_ACP_VERSION}-linux-x86_64.zip"; sha="${AGY_ACP_SHA256_AMD64}" ;; \
+      arm64) ASSET="agy-acp-server-${AGY_ACP_VERSION}-linux-arm64.zip"; sha="${AGY_ACP_SHA256_ARM64}" ;; \
+      *) echo "unsupported arch: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://dl.google.com/agy-extensions/releases/linux/${ASSET}" \
+      -o /tmp/agy-acp.zip && \
+    echo "${sha}  /tmp/agy-acp.zip" | sha256sum -c - && \
+    mkdir -p /opt/antigravity-acp && \
+    unzip -q /tmp/agy-acp.zip -d /opt/antigravity-acp && \
+    rm /tmp/agy-acp.zip && \
+    chmod +x /opt/antigravity-acp/agy_acp_server.par /opt/antigravity-acp/localharness_external && \
+    ln -s /opt/antigravity-acp/agy_acp_server.par /usr/local/bin/agy_acp_server.par && \
+    ln -s /opt/antigravity-acp/localharness_external /usr/local/bin/localharness_external
+
+# Install gh CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && apt-get install -y --no-install-recommends gh && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install OAuth authentication helper script
+COPY scripts/openab-agy-auth /usr/local/bin/openab-agy-auth
+RUN chmod +x /usr/local/bin/openab-agy-auth
+
+RUN useradd -m -s /bin/bash agent
+ENV HOME=/home/agent
+WORKDIR /home/agent
+
+COPY --from=builder --chown=agent:agent /build/target/release/openab /usr/local/bin/openab
+
+RUN mkdir -p /home/agent/.gemini && chown -R agent:agent /home/agent
+
+USER agent
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD pgrep -x openab || exit 1
+ENV OPENAB_AGENT_COMMAND="agy_acp_server.par --uid="
+ENV OPENAB_AGENT_AUTH_COMMAND="openab-agy-auth"
+
+ENTRYPOINT ["tini", "--"]
+CMD ["openab", "run", "-c", "/etc/openab/config.toml"]

@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Google Antigravity ACP Server OAuth Authentication Tool.
+
+Generates an OAuth authorization URL for personal subscription (Gemini Advanced / Google One)
+and exchanges the authorization code for a long-lived refresh token stored in
+~/.gemini/antigravity-acp/acp_token.json.
+"""
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import pathlib
+import secrets
+import sys
+import urllib.parse
+import urllib.request
+
+import re
+import shutil
+import zipfile
+
+
+def resolve_oauth_credentials() -> tuple[str, str]:
+    cid = os.environ.get("AGY_OAUTH_CLIENT_ID")
+    csec = os.environ.get("AGY_OAUTH_CLIENT_SECRET")
+    if cid and csec:
+        return cid, csec
+
+    candidates = [
+        shutil.which("agy_acp_server.par"),
+        "/usr/local/bin/agy_acp_server.par",
+        "/opt/antigravity-acp/agy_acp_server.par",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            try:
+                with zipfile.ZipFile(candidate) as z:
+                    content = z.read(
+                        "google3/cloud/developer_experience/antigravity_extensions/acp_server/ccpa_connection/oauth_manager.py"
+                    ).decode("utf-8")
+                    m_id = re.search(r'_DEFAULT_CLIENT_ID\s*=\s*\(\s*\"([^\"]+)\"', content)
+                    m_sec = re.search(r'_DEFAULT_CLIENT_SECRET\s*=\s*\"([^\"]+)\"', content)
+                    if m_id and m_sec:
+                        return m_id.group(1), m_sec.group(1)
+            except Exception:
+                pass
+
+    raise RuntimeError(
+        "Could not find agy_acp_server.par to extract OAuth credentials. "
+        "Set AGY_OAUTH_CLIENT_ID and AGY_OAUTH_CLIENT_SECRET environment variables."
+    )
+
+
+CLIENT_ID, CLIENT_SECRET = resolve_oauth_credentials()
+SCOPES = [
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/aicode",
+]
+REDIRECT_URI = "http://127.0.0.1:8085/"
+
+
+def get_paths():
+    home = os.environ.get("GEMINI_HOME") or os.path.expanduser("~")
+    base_dir = pathlib.Path(home) / ".gemini" / "antigravity-acp"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "dir": base_dir,
+        "token": base_dir / "acp_token.json",
+        "settings": base_dir / "settings.json",
+        "state": base_dir / "oauth_state.json",
+    }
+
+
+def generate_auth_url(state_path: pathlib.Path) -> str:
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode("utf-8")).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
+    state = secrets.token_urlsafe(32)
+
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "verifier": verifier,
+                "state": state,
+                "redirect_uri": REDIRECT_URI,
+            },
+            f,
+            indent=2,
+        )
+    state_path.chmod(0o600)
+
+    params = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "scope": " ".join(SCOPES),
+        "state": state,
+        "access_type": "offline",
+        "prompt": "consent",
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    return f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
+
+
+def exchange_code(code_raw: str, paths: dict):
+    code = code_raw.strip()
+    if "code=" in code:
+        parsed = urllib.parse.urlparse(code)
+        q = urllib.parse.parse_qs(parsed.query)
+        if "code" in q:
+            code = q["code"][0]
+
+    state_path = paths["state"]
+    if not state_path.exists():
+        print(f"Error: OAuth state file not found at {state_path}.", file=sys.stderr)
+        print("Please run without arguments first to generate an authorization URL.", file=sys.stderr)
+        sys.exit(1)
+
+    with open(state_path, "r", encoding="utf-8") as f:
+        st = json.load(f)
+
+    verifier = st["verifier"]
+    redirect_uri = st.get("redirect_uri", REDIRECT_URI)
+
+    data = urllib.parse.urlencode({
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "code": code,
+        "code_verifier": verifier,
+        "grant_type": "authorization_code",
+        "redirect_uri": redirect_uri,
+    }).encode("utf-8")
+
+    req = urllib.request.Request("https://oauth2.googleapis.com/token", data=data, method="POST")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            token_resp = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8", errors="replace")
+        print(f"Error HTTP {e.code}: {err_msg}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Token exchange error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    refresh_token = token_resp.get("refresh_token")
+    if not refresh_token:
+        print("Error: No refresh_token returned by Google OAuth.", file=sys.stderr)
+        sys.exit(1)
+
+    token_data = {
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "refresh_token": refresh_token,
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+
+    token_file = paths["token"]
+    with open(token_file, "w", encoding="utf-8") as f:
+        json.dump(token_data, f, indent=2)
+    token_file.chmod(0o600)
+
+    settings_file = paths["settings"]
+    with open(settings_file, "w", encoding="utf-8") as f:
+        json.dump({"auth": {"type": "oauth-personal"}}, f, indent=2)
+
+    # Clean up state file
+    try:
+        state_path.unlink()
+    except OSError:
+        pass
+
+    print(f"Successfully authenticated Google Antigravity ACP!")
+    print(f"Credentials saved to: {token_file}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Google Antigravity ACP OAuth Authentication Helper")
+    parser.add_argument("--code", help="Authorization code or redirect URL returned after login")
+    parser.add_argument("--url-only", action="store_true", help="Print only the authorization URL")
+    args = parser.parse_args()
+
+    paths = get_paths()
+
+    if args.code:
+        exchange_code(args.code, paths)
+        return
+
+    url = generate_auth_url(paths["state"])
+
+    if args.url_only:
+        print(url)
+        return
+
+    print("=" * 70)
+    print("Google Antigravity ACP Authentication")
+    print("=" * 70)
+    print("Please visit the following URL to authorize your personal Google account:")
+    print()
+    print(url)
+    print()
+    print("=" * 70)
+
+    if sys.stdin.isatty():
+        try:
+            code_input = input("Enter the authorization code (or full redirect URL): ").strip()
+            if code_input:
+                exchange_code(code_input, paths)
+        except (KeyboardInterrupt, EOFError):
+            print("\nAborted.")
+            sys.exit(1)
+    else:
+        # Non-interactive mode (e.g. Discord /auth capturing output)
+        print("After obtaining the code, complete login by running:")
+        print("  openab-agy-auth --code <code>")
+
+
+if __name__ == "__main__":
+    main()
