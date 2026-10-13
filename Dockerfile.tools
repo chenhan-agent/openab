@@ -1,0 +1,149 @@
+# syntax=docker/dockerfile:1
+ARG BASE_IMAGE=ghcr.io/openabdev/openab:0.10.0-beta.5-copilot
+
+# ==============================================================================
+# Stage 1: minimal
+# Base: Official OpenAB Copilot image (ghcr.io/openabdev/openab:<version>-copilot)
+# Adds: Core productivity CLI tools, UTF-8 locales, Chromium Playwright, Python venv with yt-dlp, agy CLI
+# ==============================================================================
+FROM ${BASE_IMAGE} AS minimal
+
+USER root
+
+# Install CLI utilities and prerequisites
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    aria2 \
+    atomicparsley \
+    bat \
+    direnv \
+    dnsutils \
+    fd-find \
+    fzf \
+    htop \
+    iputils-ping \
+    jq \
+    less \
+    locales \
+    moreutils \
+    ncdu \
+    net-tools \
+    openssh-client \
+    poppler-utils \
+    psmisc \
+    python3 \
+    python3-brotli \
+    python3-pip \
+    python3-virtualenv \
+    rsync \
+    screen \
+    silversearcher-ag \
+    sqlite3 \
+    tig \
+    tmux \
+    tree \
+    vim \
+    wget \
+    zip \
+    unzip \
+    zsh \
+    && ln -s /usr/bin/batcat /usr/local/bin/bat \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+    && sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && locale-gen \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+
+# Install Google Antigravity (agy) CLI
+ENV AGY_VERSION=1.2.13
+ARG AGY_SHA256_AMD64=b0f195d37973be7b08c3b705d7fbbcd948dacb4a3c2176ee52ca29f7159bdc21
+ARG AGY_SHA256_ARM64=43bf59be5895475f8a32d4f94f1241f665986ea41a3622579e03b74e1b63dcfb
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+      amd64) ASSET="agy_cli_linux_x64.tar.gz"; sha="${AGY_SHA256_AMD64}" ;; \
+      arm64) ASSET="agy_cli_linux_arm64.tar.gz"; sha="${AGY_SHA256_ARM64}" ;; \
+      *) echo "unsupported arch: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${AGY_VERSION}/${ASSET}" \
+      -o /tmp/agy.tar.gz && \
+    echo "${sha}  /tmp/agy.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/agy.tar.gz -C /usr/local/bin && \
+    rm /tmp/agy.tar.gz && \
+    mv /usr/local/bin/antigravity /usr/local/bin/agy && \
+    chmod +x /usr/local/bin/agy
+
+# Install Playwright and Chromium runtime
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npm install -g playwright playwright-extra puppeteer-extra-plugin-stealth --retry 3 && \
+    npx playwright install-deps chromium && \
+    npx playwright install chromium && \
+    chown -R node:node /ms-playwright
+
+# Setup Python virtualenv for isolated CLI tools
+RUN python3 -m virtualenv /opt/venv && \
+    chown -R node:node /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+RUN pip3 install --no-cache-dir requests yt-dlp && \
+    chown -R node:node /opt/venv
+
+USER node
+
+# ==============================================================================
+# Stage 2: full
+# Inherits minimal, adds Rust toolchain, Firefox, X11/VNC, Claude Code, Codex, and crawling/AI packages
+# ==============================================================================
+FROM minimal AS full
+
+USER root
+
+# Install build tools, media libraries, GUI/VNC debugging, and dev tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ffmpeg \
+    fluxbox \
+    ipython3 \
+    keychain \
+    python3-pudb \
+    sudo \
+    x11vnc \
+    xterm \
+    xvfb \
+    && echo "node ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/node \
+    && chmod 0440 /etc/sudoers.d/node \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install global Rust toolchain
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:/opt/venv/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path && \
+    chmod -R a+rwX /usr/local/cargo /usr/local/rustup
+
+# Install additional AI agents (Claude Code & Codex)
+ARG CLAUDE_AGENT_ACP_VERSION=0.59.0
+ARG CLAUDE_CODE_VERSION=2.1.212
+RUN npm install -g @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION} @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --retry 3
+ENV CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude
+
+ARG CODEX_ACP_VERSION=1.1.4
+ARG CODEX_VERSION=0.144.1
+RUN npm install -g @agentclientprotocol/codex-acp@${CODEX_ACP_VERSION} @openai/codex@${CODEX_VERSION} --fetch-retries=3
+
+# Install Playwright Firefox runtime
+RUN npx playwright install-deps firefox && \
+    npx playwright install firefox && \
+    chown -R node:node /ms-playwright
+
+# Install advanced Python crawling and AI conversion libraries
+RUN pip3 install --no-cache-dir \
+    beautifulsoup4 \
+    crawl4ai \
+    browser-use \
+    trafilatura \
+    firecrawl-py \
+    shot-scraper \
+    "markitdown[all]" && \
+    chown -R node:node /opt/venv
+
+USER node
