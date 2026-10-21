@@ -1,0 +1,64 @@
+name: Build Copilot Tools Branch Images
+
+on:
+  push:
+    branches:
+      - tools
+    paths:
+      - .github/workflows/build-copilot-tools-branch.yml
+      - Dockerfile.tools
+  workflow_dispatch:
+    inputs:
+      base_image:
+        description: 'Base OpenAB Copilot Image'
+        required: false
+        default: 'ghcr.io/openabdev/openab:0.10.0-beta.5-copilot'
+
+concurrency:
+  group: build-copilot-tools-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/chenhan-agent/openab-copilot-tools
+  DEFAULT_BASE_IMAGE: ghcr.io/openabdev/openab:0.10.0-beta.5-copilot
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: minimal
+            tag: tools-minimal
+          - target: full
+            tag: tools
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.target }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.tools
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          build-args: |
+            BASE_IMAGE=${{ github.event.inputs.base_image || env.DEFAULT_BASE_IMAGE }}
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ matrix.tag }}
+            ${{ env.IMAGE_NAME }}:${{ matrix.tag }}-${{ github.sha }}
+          cache-from: type=gha,scope=copilot-tools-${{ matrix.target }}
+          cache-to: type=gha,scope=copilot-tools-${{ matrix.target }},mode=max
