@@ -4,7 +4,7 @@ ARG AGY_IMAGE=ghcr.io/openabdev/openab:0.10.0-beta.5-antigravity
 
 # ==============================================================================
 # Helper Stage: agy-source
-# Extract official pre-compiled agy CLI and agy-acp adapter
+# Extract official pre-compiled agy-acp adapter
 # ==============================================================================
 FROM ${AGY_IMAGE} AS agy-source
 
@@ -13,7 +13,7 @@ FROM ${AGY_IMAGE} AS agy-source
 # Base: Official OpenAB Copilot image (ghcr.io/openabdev/openab:<version>-copilot)
 # Pre-installed: openab, node 22, @github/copilot, gh CLI, user 'node'
 # Adds:
-#   - agy CLI & agy-acp adapter (from official antigravity image)
+#   - agy CLI (v1.4.9) & agy-acp adapter
 #   - copilot-cli symlink
 #   - Claude Code & ACP adapter
 #   - Codex & ACP adapter
@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     aria2 \
     atomicparsley \
     bat \
+    curl \
     direnv \
     dnsutils \
     fd-find \
@@ -75,8 +76,25 @@ ENV LC_ALL=en_US.UTF-8
 # Copilot CLI symlink
 RUN ln -s /usr/local/bin/copilot /usr/local/bin/copilot-cli
 
-# Antigravity CLI & ACP adapter from official image
-COPY --from=agy-source /usr/local/bin/agy /usr/local/bin/agy
+# Antigravity CLI (pinned 1.4.9) & ACP adapter
+ARG AGY_VERSION=1.4.9
+ENV AGY_VERSION=${AGY_VERSION}
+ARG AGY_SHA256_AMD64=3d84e3a461b9cbf9ffc9deede155a01921380e964f51a82c0bc505db80ae8525
+ARG AGY_SHA256_ARM64=0e75190d5aa48b0f7623b201cfef542cd36a1279b3d28afa7fa099983a073493
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+      amd64) ASSET="agy_cli_linux_x64.tar.gz"; sha="${AGY_SHA256_AMD64}" ;; \
+      arm64) ASSET="agy_cli_linux_arm64.tar.gz"; sha="${AGY_SHA256_ARM64}" ;; \
+      *) echo "unsupported arch: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${AGY_VERSION}/${ASSET}" \
+      -o /tmp/agy.tar.gz && \
+    echo "${sha}  /tmp/agy.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/agy.tar.gz -C /usr/local/bin && \
+    rm /tmp/agy.tar.gz && \
+    mv /usr/local/bin/antigravity /usr/local/bin/agy && \
+    ln -s /usr/local/bin/agy /usr/local/bin/antigravity && \
+    chmod +x /usr/local/bin/agy
 COPY --from=agy-source /usr/local/bin/agy-acp /usr/local/bin/agy-acp
 
 # Claude Code & ACP adapter
