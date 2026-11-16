@@ -12,7 +12,7 @@ on:
       base_image:
         description: 'Base OpenAB Copilot Image'
         required: false
-        default: 'ghcr.io/openabdev/openab:0.10.0-beta.5-copilot'
+        default: 'ghcr.io/openabdev/openab:0.10.1-copilot'
 
 concurrency:
   group: build-copilot-tools-${{ github.ref }}
@@ -20,7 +20,7 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/chenhan-agent/openab-copilot-tools
-  DEFAULT_BASE_IMAGE: ghcr.io/openabdev/openab:0.10.0-beta.5-copilot
+  DEFAULT_BASE_IMAGE: ghcr.io/openabdev/openab:0.10.1-copilot
 
 jobs:
   build:

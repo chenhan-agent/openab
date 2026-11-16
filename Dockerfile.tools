@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-ARG BASE_IMAGE=ghcr.io/openabdev/openab:0.10.0-beta.5-copilot
-ARG AGY_IMAGE=ghcr.io/openabdev/openab:0.10.0-beta.5-antigravity
+ARG BASE_IMAGE=ghcr.io/openabdev/openab:0.10.1-copilot
+ARG AGY_IMAGE=ghcr.io/openabdev/openab:0.10.1-antigravity
 
 # ==============================================================================
 # Helper Stage: agy-source
@@ -13,7 +13,7 @@ FROM ${AGY_IMAGE} AS agy-source
 # Base: Official OpenAB Copilot image (ghcr.io/openabdev/openab:<version>-copilot)
 # Pre-installed: openab, node 22, @github/copilot, gh CLI, user 'node'
 # Adds:
-#   - agy CLI (v1.4.9) & agy-acp adapter
+#   - agy CLI (v1.5.9) & agy-acp adapter
 #   - copilot-cli symlink
 #   - Claude Code & ACP adapter
 #   - Codex & ACP adapter
@@ -76,11 +76,11 @@ ENV LC_ALL=en_US.UTF-8
 # Copilot CLI symlink
 RUN ln -s /usr/local/bin/copilot /usr/local/bin/copilot-cli
 
-# Antigravity CLI (pinned 1.4.9) & ACP adapter
-ARG AGY_VERSION=1.4.9
+# Antigravity CLI (pinned 1.5.9) & ACP adapter
+ARG AGY_VERSION=1.5.9
 ENV AGY_VERSION=${AGY_VERSION}
-ARG AGY_SHA256_AMD64=3d84e3a461b9cbf9ffc9deede155a01921380e964f51a82c0bc505db80ae8525
-ARG AGY_SHA256_ARM64=0e75190d5aa48b0f7623b201cfef542cd36a1279b3d28afa7fa099983a073493
+ARG AGY_SHA256_AMD64=8b1f5e56779f2434a0af36f1b715a8392a084de550f8c68bc79821f95fabf3fa
+ARG AGY_SHA256_ARM64=3a18c238c7ee6661e43df7e824a7d4c1bed78aeeda09430921a0f1dbfe825bca
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
       amd64) ASSET="agy_cli_linux_x64.tar.gz"; sha="${AGY_SHA256_AMD64}" ;; \
@@ -98,14 +98,14 @@ RUN ARCH=$(dpkg --print-architecture) && \
 COPY --from=agy-source /usr/local/bin/agy-acp /usr/local/bin/agy-acp
 
 # Claude Code & ACP adapter
-ARG CLAUDE_AGENT_ACP_VERSION=0.59.0
-ARG CLAUDE_CODE_VERSION=2.1.212
+ARG CLAUDE_AGENT_ACP_VERSION=0.84.0
+ARG CLAUDE_CODE_VERSION=2.1.284
 RUN npm install -g @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION} @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --retry 3
 ENV CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude
 
 # Codex & ACP adapter
-ARG CODEX_ACP_VERSION=1.1.4
-ARG CODEX_VERSION=0.144.1
+ARG CODEX_ACP_VERSION=2.0.0
+ARG CODEX_VERSION=0.166.0
 RUN npm install -g @agentclientprotocol/codex-acp@${CODEX_ACP_VERSION} @openai/codex@${CODEX_VERSION} --fetch-retries=3
 
 # 3. Playwright and Chromium runtime
